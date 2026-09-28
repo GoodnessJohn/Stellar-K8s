@@ -95,6 +95,9 @@ static MALLOC_CONF: &[u8] = b"prof:true,prof_active:false,lg_prof_sample:19\0";
 // Issue #67 — Cross-Chain Bridge Relayer Verification Contract
 pub mod contracts;
 
+// Issue #83 — Multi-Region Gateway Fallback & Traffic Router
+pub mod gateway;
+
 pub mod api_gateway;
 pub mod approval;
 pub mod cardinality;
