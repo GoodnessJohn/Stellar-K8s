@@ -119,6 +119,7 @@ pub mod dr_drill;
 #[cfg(test)]
 mod dr_test;
 pub(crate) mod finalizers;
+pub mod ingestion;
 pub(crate) mod forensic_snapshot;
 pub(crate) mod health;
 #[cfg(test)]
@@ -284,4 +285,11 @@ pub use finalizers::cleanup::{
 };
 pub use finalizers::cloud_verify::{
     AwsEbsVerifier, CloudVerifier, GcpPdVerifier, StubVerifier, VolumeAttachmentStatus,
+};
+
+// Issue #75 — Stellar Core Ingestion Ring Buffer & Stream Manager
+pub use ingestion::{
+    BackpressureStrategy, BatchProcessor, BufferError, BufferMetrics, LedgerEntry,
+    LedgerRingBuffer, NullProcessor, RecordingProcessor, RingBufferConfig, WorkerError,
+    WorkerMetrics, WorkerPool, WorkerPoolConfig, DEFAULT_BUFFER_CAPACITY,
 };
