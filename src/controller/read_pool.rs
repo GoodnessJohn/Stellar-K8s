@@ -538,10 +538,14 @@ fn build_read_pod_template(
                 }),
                 ..Default::default()
             }]),
-            affinity: super::resources::merge_workload_affinity(node),
+            affinity: super::resources::merge_workload_affinity(
+                node,
+                node.spec.pod_anti_affinity.clone(),
+            ),
             topology_spread_constraints: Some(super::resources::build_topology_spread_constraints(
                 &node.spec,
                 &node.name_any(),
+                node.spec.pod_anti_affinity.clone(),
             )),
             ..Default::default()
         }),

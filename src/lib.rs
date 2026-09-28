@@ -155,6 +155,7 @@ pub mod node_boot_verification;
 pub mod plugin_sdk;
 pub mod policy_promotion;
 pub mod preflight;
+#[path = "profiling/mod.rs"]
 pub mod profiling;
 pub mod progressive_config;
 pub mod runbook;
@@ -165,6 +166,7 @@ pub mod sdk;
 pub mod secrets_broker;
 pub mod search;
 pub mod security;
+#[path = "telemetry.rs"]
 pub mod telemetry;
 pub mod version_check;
 pub mod websocket_streaming;

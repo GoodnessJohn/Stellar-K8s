@@ -34,6 +34,7 @@ use crate::controller::ControllerState;
 use crate::{Error, Result};
 
 use super::audit_handlers;
+use super::alert_test;
 use super::auth;
 use super::compliance_handlers;
 use super::custom_metrics;
@@ -162,21 +163,7 @@ pub fn build_router(state: Arc<ControllerState>) -> Router {
         .route("/leader", get(handlers::leader_status))
         .route("/api/v1/nodes", get(handlers::list_nodes))
         .route("/api/v1/nodes/:namespace/:name", get(handlers::get_node))
-        // Health summary API (Issue #552) — legacy `/v1/...` prefix (not `/api/vN`)
-        .route(
-            "/v1/health/summary",
-            get(health_summary::get_health_summary),
-        )
-        .route(
-            "/v1/health/nodes",
-            get(health_summary::get_node_health_status),
-        )
-        .route(
-            "/v1/health/incidents",
-            get(health_summary::get_health_incidents),
-        )
-        // Log level dynamic control (GET is reader, POST is admin)
-        .route("/config/log-level", get(handlers::get_log_level))
+
         .route(
             "/config/log-level",
             axum::routing::post(handlers::set_log_level)

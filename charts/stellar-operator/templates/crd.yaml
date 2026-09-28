@@ -234,15 +234,50 @@ spec:
                       type: boolean
                 sorobanConfig:
                   type: object
+                  x-kubernetes-preserve-unknown-fields: true
                   properties:
                     stellarCoreUrl:
                       type: string
                     captiveCoreConfig:
                       type: string
+                    captiveCoreStructuredConfig:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
                     enablePreflight:
                       type: boolean
                     maxEventsPerRequest:
                       type: integer
+                autoscaling:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  properties:
+                    cache:
+                      type: object
+                      description: Bounded fail-open cache for read-only Soroban RPC state requests
+                      properties:
+                        enabled:
+                          type: boolean
+                          default: false
+                        ttlSecs:
+                          type: integer
+                          format: int64
+                          minimum: 1
+                          default: 30
+                        maxEntries:
+                          type: integer
+                          format: int64
+                          minimum: 1
+                          maximum: 10000
+                          default: 10000
+                        maxBytes:
+                          type: integer
+                          format: int64
+                          minimum: 1
+                          maximum: 67108864
+                          default: 67108864
+                        image:
+                          type: string
+                          nullable: true
                 serviceConfig:
                   type: object
                   properties:
@@ -275,6 +310,27 @@ spec:
                       format: int32
                       default: 0
                       description: Max snapshots to retain per node. 0 means no limit.
+                backupConfig:
+                  type: object
+                  description: Pre-upgrade backup configuration for Validator PVC snapshots. When set, the operator snapshots the PVC before applying a new version.
+                  properties:
+                    volumeSnapshotClassName:
+                      type: string
+                      description: VolumeSnapshotClass name. If unset, the default class for the PVC's driver is used.
+                    flushBeforeSnapshot:
+                      type: boolean
+                      default: false
+                      description: If true, attempt to flush/lock the Stellar DB briefly before creating the snapshot.
+                    readyTimeoutSeconds:
+                      type: integer
+                      format: int64
+                      default: 300
+                      minimum: 0
+                      description: Maximum time in seconds to wait for the snapshot to become ReadyToUse before failing the upgrade.
+                    encryptionKeyRef:
+                      type: string
+                      nullable: true
+                      description: Reference to a Cloud KMS key for encrypting the snapshot.
                 restoreFromSnapshot:
                   type: object
                   description: Bootstrap this node from an existing VolumeSnapshot (Validator only). PVC is created from the snapshot.

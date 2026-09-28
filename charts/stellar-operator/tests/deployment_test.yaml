@@ -207,7 +207,7 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --log-level=debug
 
-  - it: adds watch-namespace args when configured
+  - it: adds watch-namespace arg when configured
     set:
       operator.watchNamespace: stellar-system
     asserts:

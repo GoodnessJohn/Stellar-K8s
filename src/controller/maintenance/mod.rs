@@ -12,16 +12,30 @@
 // limitations under the License.
 //! Maintenance Window controller for Horizon DB maintenance tasks.
 //!
-//! Handles scheduling and coordination of VACUUM FULL and REINDEX operations.
+
 
 pub mod bloat;
+pub mod compactor;
 pub mod controller;
 pub mod coordinator;
+pub mod db;
 pub mod node_drain;
+pub mod pruner;
 pub mod query_profiler;
+pub mod vacuum;
 
 pub use bloat::BloatDetector;
+pub use compactor::{
+    run_compaction_cycle, CompactionCoordinator, CompactionDaemon, CompactionGuard,
+    CompactionReport, COMPACTION_MARKER_ANNOTATION,
+};
 pub use controller::MaintenanceController;
 pub use coordinator::MaintenanceCoordinator;
+pub use db::{
+    evaluate_fragmentation, total_relation_size, verify_integrity, DatabaseIntegrityVerifier,
+    FragmentationMetrics, IntegrityReport, LedgerPruner, PruningReport,
+};
 pub use node_drain::NodeDrainOrchestrator;
+pub use pruner::{Pruner, PrunerConfig, PruningResult, run_pruner_controller};
 pub use query_profiler::{IndexSuggestion, QueryProfiler, SlowQuery};
+pub use vacuum::{run_vacuum_controller, DefragResult, VacuumConfig, VacuumDefrag};

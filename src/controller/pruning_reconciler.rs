@@ -180,10 +180,13 @@ async fn process_archive(
         retained.len()
     );
 
+    let lease = super::leader::LeaseGuard::acquire("history-archive-prune").await?;
+
     // Execute pruning (or dry-run)
     let result = if worker.auto_delete_enabled() {
         // Actual deletion
         super::archive_prune::execute_prune(
+            &lease,
             deletable,
             &location,
             true, // force=true (we already validated)
@@ -193,6 +196,7 @@ async fn process_archive(
     } else {
         // Dry-run mode
         super::archive_prune::execute_prune(
+            &lease,
             deletable,
             &location,
             false, // force=false (dry-run)

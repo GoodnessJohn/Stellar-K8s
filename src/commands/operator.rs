@@ -197,7 +197,16 @@ pub async fn run_operator(args: RunArgs) -> Result<(), Error> {
 
         tokio::spawn(
             async move {
-                run_leader_election(lease_client, &lease_ns, &identity, is_leader_bg).await;
+                let leader_flag = is_leader_bg.clone();
+                let election_task = run_leader_election(lease_client, &lease_ns, &identity, leader_flag);
+                tokio::pin!(election_task);
+                tokio::select! {
+                    _ = &mut election_task => {}
+                    _ = tokio::signal::ctrl_c() => {
+                        info!("Shutdown signal received, releasing leader lease");
+                        is_leader_bg.store(false, Ordering::SeqCst);
+                    }
+                }
             }
             .instrument(root_span.clone()),
         );

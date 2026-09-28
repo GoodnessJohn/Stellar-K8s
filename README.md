@@ -134,6 +134,7 @@ helm install stellar-operator stellar-k8s/stellar-operator \
   --create-namespace
 ```
 
+
 ### Install the Operator via OLM
 
 If you are installing on a cluster with the Operator Lifecycle Manager (e.g. OpenShift), refer to the [OLM Deployment Guide](docs/deploy-olm.md).
@@ -178,6 +179,7 @@ Ready-to-use manifests for all supported node types are available in the [exampl
 - [Horizon API](examples/horizon.yaml) - Scalable REST API server with Ingress and ingestion.
 - [Soroban RPC](examples/soroban-rpc.yaml) - Smart contract execution node with autoscaling.
 - [Disaster Recovery Setup](examples/dr-setup.yaml) - Multi-cluster HA configuration with automated drills.
+- [ArgoCD GitOps deployment guide](docs/gitops/argocd.mdx) - Versioned, declarative Testnet Validator and Soroban RPC golden path.
 
 ---
 
@@ -274,6 +276,37 @@ Features:
 - **Fail-Open Support**: Configure plugins to allow requests if they fail
 
 See [wasm-webhook.md](docs/wasm-webhook.md) for complete documentation and examples.
+
+### Soroban RPC Fail-Open Cache
+
+Soroban RPC read methods can use an opt-in, bounded cache sidecar. The sidecar stores only read-only JSON-RPC responses, applies TTL/LRU eviction, and forwards requests to the RPC container whenever cache parsing, locking, allocation, or storage fails. The cache is disabled unless `spec.sorobanConfig.cache.enabled` is `true`.
+
+```yaml
+spec:
+  nodeType: SorobanRpc
+  sorobanConfig:
+    stellarCoreUrl: "http://stellar-core:11626"
+    cache:
+      enabled: true
+      ttlSecs: 30
+      maxEntries: 10000
+      maxBytes: 67108864
+```
+
+`ttlSecs`, `maxEntries`, and `maxBytes` are written to the node ConfigMap and mounted by the proxy. The hard limits are 10,000 entries and 64 MiB; values outside those bounds are rejected by CRD validation. The Service continues to expose port `8000`, while enabled nodes route that port to the sidecar on `18000` and the sidecar forwards to the unchanged RPC process on `127.0.0.1:8000`.
+
+Run the deterministic 10,000-request load check against an enabled proxy:
+
+```bash
+node benchmarks/soroban-cache-load-test.js http://127.0.0.1:18000
+```
+
+The harness warms 100 keys, checks `/stats`, and fails unless all requests succeed, the proxy reports at least 10,000 cache hits, and exactly 100 upstream reads are observed. To verify the Wasm artifact remains below 2 MiB:
+
+```bash
+cargo build --release --target wasm32-unknown-unknown -p stellar-wasm-cache
+test "$(wc -c < target/wasm32-unknown-unknown/release/stellar_wasm_cache.wasm)" -lt 2097152
+```
 
 ---
 

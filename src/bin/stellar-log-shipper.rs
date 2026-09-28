@@ -227,6 +227,8 @@ async fn upload_to_s3(
 
 struct Batch {
     lines: Vec<String>,
+    // Recorded for age-based flush decisions; retained for that upcoming use.
+    #[allow(dead_code)]
     started_at: Instant,
 }
 

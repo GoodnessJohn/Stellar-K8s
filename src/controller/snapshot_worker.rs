@@ -20,7 +20,7 @@
 //! The worker runs as an independent Tokio task alongside the main reconciliation
 //! loop.  It wakes up every `POLL_INTERVAL_SECS` seconds, lists all `StellarNode`
 //! resources in the cluster, and for each Validator with a `snapshotSchedule`
-//! calls [`super::snapshot::reconcile_snapshot`].
+//! calls [`super::csi_snapshot::reconcile_snapshot`].
 //!
 //! This decouples snapshot creation from the per-node reconcile loop so that
 //! snapshots are taken even when no spec change triggers a reconcile.
@@ -45,7 +45,7 @@ use kube::{Client, Resource, ResourceExt};
 use tracing::{debug, info, instrument, warn};
 
 use crate::controller::health;
-use crate::controller::snapshot::reconcile_snapshot;
+use crate::controller::csi_snapshot::reconcile_snapshot;
 #[allow(unused_imports)]
 use crate::crd::{NodeType, SnapshotBootstrapStatus, StellarNode};
 use crate::error::Result;

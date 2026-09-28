@@ -2070,6 +2070,55 @@ or pre-populating volumes. |
 | **Description** | Soroban RPC server configuration |
 | **Nullable** | `true` |
 
+#### `spec.sorobanConfig.cache`
+
+| | |
+|---|---|
+| **Path** | `spec.sorobanConfig.cache` |
+| **Type** | `object` |
+| **Description** | Bounded fail-open cache for read-only Soroban RPC state requests |
+| **Nullable** | `true` |
+
+##### `spec.sorobanConfig.cache.enabled`
+
+| | |
+|---|---|
+| **Path** | `spec.sorobanConfig.cache.enabled` |
+| **Type** | `boolean` |
+| **Default** | `False` |
+
+##### `spec.sorobanConfig.cache.image`
+
+| | |
+|---|---|
+| **Path** | `spec.sorobanConfig.cache.image` |
+| **Type** | `string` |
+| **Nullable** | `true` |
+
+##### `spec.sorobanConfig.cache.maxBytes`
+
+| | |
+|---|---|
+| **Path** | `spec.sorobanConfig.cache.maxBytes` |
+| **Type** | `integer` (int64) |
+| **Default** | `67108864` |
+
+##### `spec.sorobanConfig.cache.maxEntries`
+
+| | |
+|---|---|
+| **Path** | `spec.sorobanConfig.cache.maxEntries` |
+| **Type** | `integer` (int64) |
+| **Default** | `10000` |
+
+##### `spec.sorobanConfig.cache.ttlSecs`
+
+| | |
+|---|---|
+| **Path** | `spec.sorobanConfig.cache.ttlSecs` |
+| **Type** | `integer` (int64) |
+| **Default** | `30` |
+
 #### `spec.sorobanConfig.captiveCoreConfig`
 
 | | |

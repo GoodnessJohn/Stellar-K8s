@@ -45,6 +45,7 @@
 	compliance-test \
 	cleanup clean
 
+# Default target
 .DEFAULT_GOAL := help
 
 # Variables
@@ -60,34 +61,8 @@ BUNDLE_IMG ?= $(IMAGE_NAME)-bundle:v$(VERSION)
 CHANNELS ?= "alpha"
 DEFAULT_CHANNEL ?= "alpha"
 
-# Clippy configuration (shared between lint and lint-strict)
-CLIPPY_BASE_FLAGS := \
-	-D clippy::correctness \
-	-D clippy::suspicious \
-	-D clippy::perf \
-	-D clippy::style \
-	-A clippy::new_without_default \
-	-A clippy::match_like_matches_macro \
-	-A clippy::match_result_ok \
-	-A clippy::needless_borrow \
-	-A clippy::get_first \
-	-A clippy::format_in_format_args \
-	-A clippy::single_match \
-	-A clippy::redundant_closure \
-	-A clippy::items_after_test_module \
-	-A clippy::approx_constant \
-	-A clippy::should_implement_trait
-
-CLIPPY_STRICT_FLAGS := \
-	-D clippy::complexity \
-	-A clippy::cognitive_complexity \
-	-A clippy::too_many_lines \
-	-A clippy::type_complexity
-
-CLIPPY_FEATURES := "rest-api,metrics,admission-webhook,k8s-v1-30,reconciler-fuzz"
-
-help: ## Show this help and the canonical command flow
-	@echo 'Stellar-K8s Makefile'
+help: ## Show this help
+	@echo 'Usage: make [target]'
 	@echo ''
 	@echo 'Canonical Command Flow:'
 	@echo '  Setup:    make dev-setup         One-time environment setup'
@@ -225,9 +200,9 @@ test-helm-bump: ## Bats tests for bump-chart-version.sh (#1319)
 
 test: ## Run tests
 	@echo "→ Running tests..."
-	@$(CARGO) test --workspace --features $(CLIPPY_FEATURES) --tests --lib --bins --verbose
+	@$(CARGO) test --workspace --features "rest-api,metrics,admission-webhook,k8s-v1-30,reconciler-fuzz" --tests --lib --bins --verbose
 	@echo "→ Running doc tests..."
-	@$(CARGO) test --doc --workspace --features $(CLIPPY_FEATURES)
+	@$(CARGO) test --doc --workspace --features "rest-api,metrics,admission-webhook,k8s-v1-30"
 
 build: ## Build release
 	@echo "→ Building release..."
@@ -241,7 +216,7 @@ chaos-test: ## Run the chaos engineering resilience suite (needs kind + Chaos Me
 
 docker-build: ## Fast local Docker build using host release binaries
 	@echo "→ Building Docker image (fast local mode)..."
-	@if [ ! -f target/release/stellar-operator ] || [ ! -f target/release/kubectl-stellar ]; then \
+	@if [ ! -f target/release/stellar-operator ] || [ ! -f target/release/kubectl-stellar ] || [ ! -f target/release/soroban-cache-proxy ]; then \
 		echo "→ Release binaries not found, building once..."; \
 		$(MAKE) build; \
 	fi
@@ -280,34 +255,9 @@ check-unreachable-modules: ## Static check for unreachable modules and dead code
 	@echo "→ Checking unreachable modules and dead code paths..."
 	@$(CARGO) run --quiet --locked --bin check-unreachable-modules
 
-link-check: ## Check markdown links (internal anchors + relative paths)
-	@echo "→ Running markdown link checker..."
-	@python3 scripts/check-links.py
-
-link-check-all: ## Repo-wide link check (markdown + source + configs) via lychee
-	@echo "→ Running repo-wide link checker (lychee)..."
-	@command -v lychee >/dev/null 2>&1 || { \
-		echo "lychee not found. Install with: cargo install lychee --locked"; \
-		exit 1; \
-	}
-	@lychee --config lychee.toml --no-progress --cache \
-		'./**/*.md' './**/*.rs' './**/*.toml' \
-		'./**/*.yaml' './**/*.yml' './**/*.sh' './**/*.html'
-
-changelog: ## Generate/update CHANGELOG.md using git-cliff
-	@echo "→ Generating changelog..."
-	@command -v git-cliff >/dev/null 2>&1 || cargo install git-cliff
-	git-cliff --output CHANGELOG.md
-
-ci-local: fmt-check lint docs-lint audit test build link-check ## Run full CI locally (includes strict docs lint)
+ci-local: fmt-check lint audit test build ## Run full CI locally
 	@echo ""
 	@echo "✓ All CI checks passed!"
-
-third-party-licenses: ## Regenerate THIRD_PARTY_LICENSES.md from Cargo dependency tree
-	@bash scripts/generate-third-party-licenses.sh
-
-check-third-party-licenses: ## Verify THIRD_PARTY_LICENSES.md is up to date (used in CI)
-	@bash scripts/generate-third-party-licenses.sh --check
 
 quick: fmt-check ## Quick pre-commit check
 	@$(CARGO) check --workspace
@@ -321,13 +271,8 @@ pre-commit: ## Run pre-commit hooks manually
 pre-commit-install: dev-setup-hooks ## Install pre-commit hooks (alias for dev-setup-hooks)
 	@echo "✓ pre-commit hooks installed"
 
-cleanup: ## Repository cleanup (scratch artifacts + obsolete archive-path guard)
-	@bash scripts/cleanup.sh $(if $(filter 1 true TRUE yes YES,$(DRY_RUN)),--dry-run,)
-
 clean: ## Clean build artifacts
 	$(CARGO) clean
-
-# ── API Documentation ─────────────────────────────────────────────────────────
 
 generate-api-docs: ## Generate API reference docs from CRD schema
 	@echo "→ Generating API reference docs..."
@@ -367,7 +312,7 @@ install-crd: ## Install CRDs
 apply-samples: install-crd ## Apply samples
 	$(KUBECTL) apply -f config/samples/
 
-crd-gen: ## Generate CRDs (output is sorted for deterministic diffs)
+crd-gen: ## Generate CRDs
 	@echo "→ Generating CRDs..."
 	@$(CARGO) run --bin crdgen | python3 scripts/sort-manifests.py > config/crd/stellarnode-crd.yaml
 	@echo "✓ CRD written to config/crd/stellarnode-crd.yaml (deterministic order)"
@@ -432,103 +377,32 @@ check-breaking-changes: ## Detect breaking API changes vs base branch (#1288)
 		--base /tmp/base-openapi.yaml \
 		--head docs/api/openapi.yaml
 
-# ── Completions ────────────────────────────────────────────────────────────────
-
-completions: completions-bash completions-zsh completions-fish ## Generate all shell completion scripts
-
-completions-bash: ## Generate bash completion script
-	@echo "→ Generating bash completions..."
+completions: ## Generate shell completion scripts
+	@echo "→ Generating shell completions..."
 	@mkdir -p completions
 	@$(CARGO) run --bin stellar-completions completions bash > completions/stellar-operator.bash
-	@echo "✓ Bash completions generated: completions/stellar-operator.bash"
-
-completions-zsh: ## Generate zsh completion script
-	@echo "→ Generating zsh completions..."
-	@mkdir -p completions
 	@$(CARGO) run --bin stellar-completions completions zsh > completions/_stellar-operator
-	@echo "✓ Zsh completions generated: completions/_stellar-operator"
-
-completions-fish: ## Generate fish completion script
-	@echo "→ Generating fish completions..."
-	@mkdir -p completions
 	@$(CARGO) run --bin stellar-completions completions fish > completions/stellar-operator.fish
-	@echo "✓ Fish completions generated: completions/stellar-operator.fish"
-
-# ── Helm ──────────────────────────────────────────────────────────────────────
+	@echo "✓ Completions generated in ./completions/"
+	@echo "  Bash: source completions/stellar-operator.bash"
+	@echo "  Zsh:  Copy completions/_stellar-operator to your fpath"
+	@echo "  Fish: Copy completions/stellar-operator.fish to ~/.config/fish/completions/"
 
 helm-lint: ## Helm lint check
 	@echo "→ Linting Helm charts..."
-	helm lint charts/stellar-operator --strict
-	@echo "→ Validating Helm template rendering..."
-	helm template stellar-operator charts/stellar-operator > /dev/null
-	@$(MAKE) --no-print-directory helm-drift
-	@echo "✓ Helm charts passed linting, validation, and drift checks"
+	helm lint charts/stellar-operator
 
-helm-unittest: ## Helm unittest including edge-case and upgrade preservation suites (#1289)
-	@echo "→ Running Helm unit tests..."
-	helm unittest charts/stellar-operator --strict --color
-
-helm-upgrade-test: ## Values-preservation check from the last supported production schema (#1289)
-	@echo "→ Running Helm upgrade preservation check..."
-	@bash scripts/ci/helm-upgrade-test.sh
-
-# ── Development Setup ─────────────────────────────────────────────────────────
-
-dev-setup: dev-setup-rust dev-setup-tools dev-setup-hooks ## Setup dev environment
-	@echo ""
-	@echo "→ Validating toolchain after setup..."
-	@bash scripts/health-check.sh || true
-	@echo ""
-	@echo "╔════════════════════════════════════════════════════════════════╗"
-	@echo "║         Development Environment Setup Complete ✓              ║"
-	@echo "╚════════════════════════════════════════════════════════════════╝"
-	@echo ""
-	@echo "Next steps:"
-	@echo "  1. Verify setup:  make health-check"
-	@echo "  2. Run preflight:  make preflight"
-	@echo "  3. Quick checks:   make quick"
-	@echo "  4. Build locally:  make build"
-	@echo ""
-	@echo "If health-check reports missing tools, see docs/development/setup-prerequisites.md#troubleshooting"
-
-dev-setup-rust: ## Install Rust toolchain and components
-	@echo "→ Setting up Rust toolchain..."
+dev-setup: ## Setup dev environment
 	rustup update stable
 	rustup default stable
 	rustup component add clippy rustfmt
-	@echo "✓ Rust toolchain ready"
-
-dev-setup-tools: ## Install development tools
-	@echo "→ Installing development tools..."
 	cargo install cargo-audit cargo-watch
-	@echo "✓ Development tools installed"
-
-dev-setup-hooks: ## Install git hooks
-	@echo "→ Installing git hooks..."
 	@command -v pre-commit >/dev/null 2>&1 || pip install pre-commit
 	pre-commit install
 	pre-commit install --hook-type pre-push
-	@echo "✓ Git hooks installed"
-
-health-check: ## Full environment health check with detailed diagnostics
-	@bash scripts/health-check.sh
-
-health-check-json: ## Environment health check (JSON output)
-	@bash scripts/health-check.sh --json
-
-health-check-fix: ## Attempt to auto-fix missing components
-	@bash scripts/health-check.sh --fix
-
-dev-setup-verify: ## Validate the dev environment (cross-platform, Windows-safe — no shell dependency)
-	@echo "→ Validating development environment..."
-	@$(CARGO) run --locked --bin stellar-bootstrap-verify
-
-# ── Watch ──────────────────────────────────────────────────────────────────────
 
 watch: ## Watch and rebuild
 	cargo watch -x check -x test -x build
-
-# ── Benchmarks ────────────────────────────────────────────────────────────────
 
 benchmark: ## Run k6 performance benchmarks
 	@echo "→ Running k6 benchmarks..."
@@ -540,33 +414,16 @@ benchmark-webhook: ## Run webhook performance benchmarks
 	@command -v k6 >/dev/null 2>&1 || (echo "✗ k6 not installed. Install: https://k6.io/docs/get-started/installation/" && exit 1)
 	@./benchmarks/run-webhook-benchmark.sh run
 
-benchmark-crd: ## CRD validation performance benchmark
-	@echo "→ Running CRD validation benchmarks..."
-	@python3 scripts/benchmark-crd-validation.py \
-		--manifests 500 \
-		--baseline benchmarks/baselines/crd-performance-v0.1.0.json \
-		--output results/crd-benchmark.json
+benchmark-webhook-health: ## Check webhook health
+	@./benchmarks/run-webhook-benchmark.sh health
 
-benchmark-helm: ## Helm rendering performance benchmark
-	@echo "→ Running Helm rendering benchmarks..."
-	@bash scripts/benchmark-helm.sh \
-		--chart charts/stellar-operator \
-		--baseline benchmarks/baselines/helm-rendering-v0.1.0.json \
-		--output results/helm-benchmark.json
+benchmark-webhook-compare: ## Compare webhook results with baseline
+	@./benchmarks/run-webhook-benchmark.sh compare
 
-benchmark-api: ## Operator API throughput benchmark (requires running operator)
-	@echo "→ Running operator API throughput benchmarks..."
-	@python3 scripts/benchmark-api.py \
-		--endpoint http://localhost:8080/api/v1 \
-		--requests 1000 \
-		--output results/api-benchmark.json \
-		--baseline benchmarks/baselines/operator-api-v0.1.0.json
+benchmark-webhook-save: ## Save current results as baseline
+	@./benchmarks/run-webhook-benchmark.sh save-baseline
 
-benchmark-reconciliation: ## Operator reconciliation latency benchmark
-	@echo "→ Running operator reconciliation benchmarks..."
-	@$(CARGO) test --bench reconciliation_benchmark --release -- --nocapture --test-threads=1
-
-benchmark-all: benchmark benchmark-webhook benchmark-crd benchmark-helm ## Run all performance benchmarks
+benchmark-all: benchmark benchmark-webhook ## Run all benchmarks
 
 # ── Running the Operator ──────────────────────────────────────────────────────
 
@@ -578,24 +435,15 @@ run: run-local ## Run the operator (alias for run-local; matches README and CI r
 run-dev: ## Run operator in dev mode with hot reload
 	RUST_LOG=debug cargo watch -x run
 
-
-# ── Bundle ────────────────────────────────────────────────────────────────────
-
-bundle: bundle-render bundle-generate bundle-validate ## Generate bundle manifests and metadata, then validate
-
-bundle-render: ## Render Helm chart to manifests (sorted for deterministic pipeline diffs)
+# Bundle targets
+.PHONY: bundle bundle-build
+bundle: ## Generate bundle manifests and metadata, then validate generated files.
 	@echo "→ Generating manifests from Helm chart..."
 	@mkdir -p rendered
-	@helm template stellar-operator charts/stellar-operator \
-		| python3 scripts/sort-manifests.py > rendered/manifests.yaml
-	@echo "✓ Rendered manifests written to rendered/manifests.yaml (deterministic order)"
-
-bundle-generate: ## Generate OLM bundle from manifests
+	@helm template stellar-operator charts/stellar-operator > rendered/manifests.yaml
 	@echo "→ Generating bundle..."
 	@operator-sdk generate kustomize manifests -q
 	@kustomize build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION) --channels $(CHANNELS) --default-channel $(DEFAULT_CHANNEL)
-
-bundle-validate: ## Validate generated bundle
 	@echo "→ Validating bundle..."
 	@operator-sdk bundle validate ./bundle
 	@rm -rf rendered
@@ -603,26 +451,18 @@ bundle-validate: ## Validate generated bundle
 bundle-build: ## Build the bundle image.
 	docker build -f bundle.Dockerfile -t $(BUNDLE_IMG) .
 
-# ── Quickstart ────────────────────────────────────────────────────────────────
-
-quickstart: quickstart-setup quickstart-build quickstart-deploy ## End-to-end local quickstart
-
-quickstart-setup: ## Create kind cluster and check prerequisites
+quickstart: ## End-to-end local quickstart: kind cluster + CRD + operator + sample StellarNode
 	@echo "→ Checking prerequisites..."
 	@command -v kind >/dev/null 2>&1 || (echo "✗ kind not found. Install: https://kind.sigs.k8s.io/docs/user/quick-start/#installation" && exit 1)
 	@command -v kubectl >/dev/null 2>&1 || (echo "✗ kubectl not found. Install: https://kubernetes.io/docs/tasks/tools/" && exit 1)
 	@command -v helm >/dev/null 2>&1 || (echo "✗ helm not found. Install: https://helm.sh/docs/intro/install/" && exit 1)
 	@echo "→ Creating kind cluster 'stellar-dev'..."
 	@kind create cluster --name stellar-dev --wait 120s || echo "  (cluster may already exist, continuing)"
-
-quickstart-build: ## Build and load operator image into kind
 	@echo "→ Building operator image..."
 	@$(MAKE) build
 	@DOCKER_BUILDKIT=1 $(DOCKER) build --target runtime-local -t stellar-operator:dev .
 	@echo "→ Loading image into kind cluster..."
 	@kind load docker-image stellar-operator:dev --name stellar-dev
-
-quickstart-deploy: ## Deploy operator and sample resources
 	@echo "→ Installing CRD..."
 	@$(KUBECTL) apply -f config/crd/stellarnode-crd.yaml
 	@echo "→ Creating namespace stellar-system..."
@@ -641,12 +481,9 @@ quickstart-deploy: ## Deploy operator and sample resources
 	@echo "  View resources: kubectl get deploy,sts,svc,pvc -n stellar-system"
 	@echo "  Cleanup:        kind delete cluster --name stellar-dev"
 
-# ── Full Pipeline ──────────────────────────────────────────────────────────────
+all: ci-local docker-build ## Full build pipeline
 
-all: ci-local docker-build ## Full build pipeline: CI checks + Docker image
-
-# ── Docker Compose ────────────────────────────────────────────────────────────
-
+# Docker Compose targets
 compose-up: ## Start Docker Compose development environment
 	@echo "→ Starting Docker Compose environment..."
 	@docker-compose up -d

@@ -1,8 +1,7 @@
 # syntax=docker/dockerfile:1.7
-ARG SOURCE_DATE_EPOCH=0
 # ==============================================================================
 # Stage 1: Chef - Dependency Caching Layer
-# (linux/amd64 only)
+# Multi-arch: supports linux/amd64 and linux/arm64 (Graviton, Apple Silicon)
 # ==============================================================================
 FROM lukemathwalker/cargo-chef:latest-rust-1.98-slim-bookworm AS chef
 WORKDIR /app
@@ -16,24 +15,36 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 # ==============================================================================
 # Stage 3: Builder - Build dependencies (cached) then application
+# TARGETPLATFORM / TARGETARCH are injected by docker buildx automatically.
 # ==============================================================================
 FROM chef AS builder
 
-# Install system dependencies
-RUN apt-get update -qq && \
-    apt-get install -y --no-install-recommends \
-      cmake \
-      libssl-dev \
-      libsasl2-dev \
-      pkg-config && \
-    rm -rf /var/lib/apt/lists/*
+ARG TARGETPLATFORM
+ARG TARGETARCH
+ARG BUILDPLATFORM
+
+# Install cross-compilation toolchains when building for arm64 on amd64 host.
+RUN if [ "$TARGETARCH" = "arm64" ] && [ "$BUILDPLATFORM" != "$TARGETPLATFORM" ]; then \
+      apt-get update -qq && \
+      apt-get install -y --no-install-recommends \
+        gcc-aarch64-linux-gnu \
+        libc6-dev-arm64-cross && \
+      rustup target add aarch64-unknown-linux-gnu; \
+    fi
+
+# Set Cargo target based on TARGETARCH.
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
 
 # Copy the recipe and build dependencies first (cached layer)
 COPY --from=planner /app/recipe.json recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
   --mount=type=cache,target=/usr/local/cargo/git \
   --mount=type=cache,target=/app/target \
-  cargo chef cook --release --recipe-path recipe.json
+  if [ "$TARGETARCH" = "arm64" ] && [ "$BUILDPLATFORM" != "$TARGETPLATFORM" ]; then \
+    cargo chef cook --release --target aarch64-unknown-linux-gnu --recipe-path recipe.json; \
+  else \
+    cargo chef cook --release --recipe-path recipe.json; \
+  fi
 
 # Now copy source and build binaries in a single step to share
 # the dependency cache layer and avoid redundant recompilation.
@@ -70,13 +81,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # ==============================================================================
 # Stage 4: Local Binaries - Fast local packaging from host build artifacts
-# DEV-ONLY: Used by `make docker-build` for rapid local iteration.
-# Requires host-side `cargo build --release` to have run first.
-# NOT used in CI (CI uses Stage 3 builder + Stage 7 runtime instead).
 # ==============================================================================
 FROM scratch AS local-binaries
 COPY target/release/stellar-operator /stellar-operator
 COPY target/release/kubectl-stellar /kubectl-stellar
+COPY target/release/soroban-cache-proxy /soroban-cache-proxy
 
 # ==============================================================================
 # Stage 5: Runtime Base - Shared runtime dependencies for all runtime images
@@ -85,28 +94,19 @@ COPY target/release/kubectl-stellar /kubectl-stellar
 # health-check declaration that are identical between the local-dev and CI
 # runtime images.  Both runtime-local and runtime inherit from this stage.
 # ==============================================================================
-FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS runtime-base
-
-# Install runtime dependencies for dynamic linking
-RUN apt-get update -qq && \
-    apt-get install -y --no-install-recommends \
-      ca-certificates \
-      libssl3 \
-      libsasl2-2 \
-      liblzma5 \
-      libzstd1 \
-      libbz2-1.0 && \
-    rm -rf /var/lib/apt/lists/*
-
-# Create nonroot user
-RUN useradd -u 65532 -U -m -s /bin/bash nonroot
+FROM gcr.io/distroless/cc-debian12:nonroot AS runtime-local
 
 # Labels for container registry
 LABEL org.opencontainers.image.source="https://github.com/stellar/stellar-k8s"
 LABEL org.opencontainers.image.description="Stellar-K8s Kubernetes Operator"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 
-# Run as nonroot user
+# Copy prebuilt local binaries
+COPY --from=local-binaries /stellar-operator /stellar-operator
+COPY --from=local-binaries /kubectl-stellar /kubectl-stellar
+COPY --from=local-binaries /soroban-cache-proxy /soroban-cache-proxy
+
+# Run as non-root user (UID 65532 is the nonroot user in distroless)
 USER nonroot:nonroot
 
 # Expose metrics and REST API ports
@@ -114,20 +114,29 @@ EXPOSE 8080 9090
 
 # Health check endpoint
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD ["/stellar-operator", "version"]
+  CMD ["/stellar-operator", "--health-check"] || exit 1
+
+ENTRYPOINT ["/stellar-operator"]
 
 # ==============================================================================
 # Stage 6: Runtime Local - Minimal image for local dev (no container recompile)
 # DEV-ONLY: Final target for `make docker-build`. Copies pre-built binaries
 # from Stage 4 (local-binaries). NOT used in CI.
 # ==============================================================================
-FROM runtime-base AS runtime-local
+FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 
-# Copy prebuilt host binaries (assumes 'make build' has been run locally)
-COPY target/release/stellar-operator /stellar-operator
-COPY target/release/kubectl-stellar /kubectl-stellar
+# Labels for container registry
+LABEL org.opencontainers.image.source="https://github.com/stellar/stellar-k8s"
+LABEL org.opencontainers.image.description="Stellar-K8s Kubernetes Operator"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 
-ENTRYPOINT ["/stellar-operator"]
+# Copy stripped binaries
+COPY --from=builder /app/target/release/stellar-operator /stellar-operator
+COPY --from=builder /app/target/release/kubectl-stellar /kubectl-stellar
+COPY --from=builder /app/target/release/stellar-sidecar /stellar-sidecar
+COPY --from=builder /app/target/release/stellar-watcher /stellar-watcher
+COPY --from=builder /app/target/release/stellar-fork-detector /stellar-fork-detector
+COPY --from=builder /app/target/release/soroban-cache-proxy /soroban-cache-proxy
 
 # ==============================================================================
 # Stage 7: Runtime - Minimal image with all binaries (~15-20MB total)

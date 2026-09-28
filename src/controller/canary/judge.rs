@@ -36,6 +36,9 @@ pub struct MetricComparison {
 }
 
 pub struct CanaryJudge {
+    // Retained for the forthcoming real Kayenta API integration; the current
+    // implementation simulates the judge locally.
+    #[allow(dead_code)]
     kayenta_url: String,
 }
 

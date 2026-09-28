@@ -31,6 +31,7 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tracing::{debug, error, info, warn};
 
+use crate::controller::leader::LeaseGuard;
 use crate::Error;
 
 /// Minimum number of checkpoints to always retain (safety buffer)
@@ -458,7 +459,12 @@ pub fn identify_deletable_checkpoints(
 }
 
 /// Execute the pruning operation
+///
+/// This function must only be called while holding the distributed leader lease.
+/// The `_lease` guard is required to statically prevent non-leader pods from
+/// deleting history archive checkpoints.
 pub async fn execute_prune(
+    _lease: &LeaseGuard,
     deletable: Vec<Checkpoint>,
     location: &ArchiveLocation,
     force: bool,
@@ -513,6 +519,7 @@ pub async fn execute_prune(
     let errors: Arc<tokio::sync::Mutex<Vec<String>>> =
         Arc::new(tokio::sync::Mutex::new(Vec::new()));
 
+    let delete_stream = stream::iter(deletable.into_iter())
     let _deletable_count = deletable.len();
     let delete_stream = stream::iter(deletable)
         .map(|checkpoint| {
@@ -677,8 +684,19 @@ pub async fn prune_archive(args: PruneArchiveArgs) -> Result<(), Error> {
         println!("  Space to be freed:    {}", format_bytes(total_bytes));
     }
 
+    // Acquire the distributed leader lease before mutating the archive.
+    // A non-leader pod must never delete history archive checkpoints.
+    let _lease = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        LeaseGuard::acquire("history-archive-prune"),
+    )
+    .await
+    .map_err(|_| Error::ConfigError("timed out acquiring leader lease".to_string()))?
+    .map_err(|e| Error::ConfigError(format!("failed to acquire leader lease: {e}")))?;
+
     // Execute pruning
-    let mut result = execute_prune(deletable, &location, args.force, args.concurrency).await?;
+    let mut result =
+        execute_prune(&_lease, deletable, &location, args.force, args.concurrency).await?;
     result.total_checkpoints = checkpoints.len();
     result.retained_count = retained.len();
     result.retained_ledgers = retained.iter().map(|c| c.ledger_seq).collect();

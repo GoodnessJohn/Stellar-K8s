@@ -5,29 +5,16 @@ edition = "2021"
 authors = ["Stellar K8s Contributors"]
 description = "Cloud-Native Kubernetes Operator for Stellar Infrastructure"
 license = "Apache-2.0"
-repository = "https://github.com/OtowoOrg/Stellar-K8s"
-autobenches = false
+repository = "https://github.com/stellar/stellar-k8s"
 
 [dependencies]
 ed25519-dalek = { version = "2", features = ["rand_core"] }
-lru = "0.16"
-printpdf = "0.7"
-toml = "0.5"
+toml = "0.8"
 # Glob pattern matching for label propagation filters
 glob = "0.3"
 
-# Directory tree walking (used by build.rs and doc-check)
-walkdir = "2"
-
 # Kubernetes client and operator framework
-kube = { version = "0.94", features = [
-    "runtime",
-    "derive",
-    "unstable-runtime",
-    "admission",
-    "client",
-    "ws",
-] }
+kube = { version = "0.94", features = ["runtime", "derive", "unstable-runtime", "admission", "client", "ws"] }
 kube-runtime = { version = "0.94", features = ["unstable-runtime"] }
 k8s-openapi = { version = "0.22", default-features = false, features = [
     "v1_30",
@@ -43,15 +30,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 
-# JWT support
-jsonwebtoken = "9"
-
-# Regex for routing
-regex = "1"
-
-# HTTP types
-http = "1"
-
 # Schema generation for CRDs
 schemars = { version = "0.8", features = ["chrono"] }
 
@@ -60,25 +38,29 @@ thiserror = "1"
 anyhow = "1.0.104" # Pinned to Cargo.lock (1.0.104); 1.0.108 was unpublished
 # CLI argument parsing
 clap = { version = "4.5", features = ["derive", "env"] }
-clap_complete = "4.6"
+clap_complete = "4.5"
 
 # Date/time handling
 chrono = { version = "0.4", features = ["serde"] }
-# Pinned to latest patch for security fixes; used transitively by many HTTP/async crates.
+# Pinned to fix RUSTSEC-2026-0009 (stack exhaustion DoS); also used transitively
+# by rcgen/yasna/x509-parser.
+time = "0.3.47"
+# Pinned to fix RUSTSEC-2026-0007; used transitively by many HTTP/async crates.
 bytes = "1.11.1"
+
 # Zip compression for incident reports
 zip = "2"
+tempfile = "3"
 
 # Hostname for leader election
 hostname = "0.4"
 
+# Regex for log scrubbing patterns
+regex = "1"
+
 # Logging and tracing
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = [
-    "env-filter",
-    "json",
-    "registry",
-] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "registry"] }
 tracing-opentelemetry = "0.22"
 
 # OpenTelemetry for distributed tracing
@@ -96,25 +78,18 @@ reqwest = { version = "0.12", default-features = false, features = [
     
     "multipart",
 ] }
+
+# Kafka client for SCP analytics pipeline
 rdkafka = { version = "0.36", optional = true, features = [
     "cmake-build",
     "ssl",
     "sasl",
 ] }
-async-nats = { version = "0.35", optional = true }
-# Vendored libsasl2; required only when the kafka feature is enabled.
-sasl2-sys = { version = "0.1.22", features = ["vendored"], optional = true }
 
 # REST API (optional)
-axum = { version = "0.7.5", optional = true, features = ["ws"] }
+axum = { version = "0.8.8", optional = true, features = ["ws"] }
 tower = { version = "0.4", optional = true }
 tower-http = { version = "0.5", features = ["trace"], optional = true }
-
-# Optional production profiling (#1330) — not in default features
-pprof = { version = "0.14", default-features = false, features = ["prost-codec"], optional = true }
-prost = { version = "0.12", optional = true }
-tikv-jemallocator = { version = "0.6", features = ["profiling", "unprefixed_malloc_on_supported_platforms"], optional = true }
-jemalloc_pprof = { version = "0.8", optional = true }
 
 # Metrics
 prometheus-client = { version = "0.22", optional = true }
@@ -129,9 +104,12 @@ rustls-pki-types = "1.14.1"
 # certificate-health verifier (src/webhook/cert_health.rs).
 x509-parser = { version = "0.16", features = ["verify"] }
 
+# Bounded Soroban RPC cache primitives and Wasm guest
+stellar-wasm-cache = { path = "wasm-plugins" }
+
 # Wasm runtime for custom validation plugins
-wasmtime = { version = "24.0.11", optional = true }
-wasmtime-wasi = { version = "24.0.11", features = ["preview1"], optional = true }
+wasmtime = { version = "24.0.7", optional = true }
+wasmtime-wasi = { version = "24.0.7", features = ["preview1"], optional = true }
 
 # Additional crypto for webhook TLS
 tokio-rustls = { version = "0.26", optional = true }
@@ -141,15 +119,20 @@ base64 = "0.21"
 
 # HMAC-SHA256 for webhook payload signing
 hmac = "0.12"
+http = "1"
+jsonwebtoken = "9"
+lru = "0.12"
 
 # SHA256 for plugin integrity verification
 sha2 = "0.10"
 hex = "0.4"
-rand = { version = "0.8", features = ["small_rng"] }
+rand = "0.8"
+# Keccak-256 for Merkle proof verification (issue #113)
+tiny-keccak = { version = "2.0", features = ["keccak"] }
+rand_distr = "0.5.1"
 
 # Backup scheduler dependencies
 cron = "0.15"
-tar = "0.4"
 flate2 = "1"
 # Used unconditionally by backup-verify's restore integrity check, not just tests
 tempfile = "3"
@@ -159,15 +142,22 @@ sqlx = { version = "0.8.6", default-features = false, features = [
     "postgres",
     "chrono",
 ] }
+pqcrypto-dilithium = "0.5.0"
+pqcrypto-kyber = "0.8.1"
+pqcrypto-traits = "0.3.5"
 comfy-table = "7.2.2"
 csv = "1.4.0"
 url = "2.5"
 urlencoding = "2.1"
-aws-sdk-s3 = "1.132.0"
-aws-config = "1.8.17"
-json-patch = "4.2.0"
+aws-sdk-s3 = "1.131.0"
+aws-sdk-secretsmanager = "1"
+aws-config = "1.8.16"
+serde_json_diff = "0.2.0"
+json-patch = "4.1.0"
 md5 = "0.8.0"
-uuid = { version = "1.26.0", features = ["v4"] }
+# tar archive extraction for snapshot bootstrapping (#119)
+tar = "0.4"
+
 
 [build-dependencies]
 chrono = "0.4"
@@ -176,28 +166,21 @@ walkdir = "2"
 serde = { version = "1", features = ["derive"] }
 
 [features]
-default = ["rest-api", "metrics", "admission-webhook", "k8s-v1-30"]
-rest-api = ["dep:axum", "dep:tower", "dep:tower-http"]
+default = ["rest-api", "metrics", "admission-webhook", "k8s-v1-30", "kafka"]
+rest-api = ["axum", "tower", "tower-http"]
 metrics = ["prometheus-client", "once_cell"]
-kafka = ["dep:rdkafka", "dep:sasl2-sys"]
-nats = ["dep:async-nats"]
 admission-webhook = [
     "wasmtime",
     "wasmtime-wasi",
     "tokio-rustls",
-    "dep:axum",
-    "dep:tower",
-    "dep:tower-http",
+    "axum",
+    "tower",
+    "tower-http",
 ]
-# CPU (pprof) + heap (jemalloc) profiling HTTP endpoints for the operator REST API (#1330).
-# Off by default. Requires REST_API_PROFILING_ENABLED=true at runtime to register routes.
-profiling = [
-    "rest-api",
-    "dep:pprof",
-    "dep:prost",
-    "dep:tikv-jemallocator",
-    "dep:jemalloc_pprof",
-]
+axum = ["dep:axum"]
+# Keep the SCP Kafka analytics pipeline enabled by default; tests can opt out
+# with `--no-default-features` in minimal build environments.
+kafka = ["rdkafka"]
 # Expose reconciler for state-machine fuzzing (reconcile_no_panic, event sequences)
 reconciler-fuzz = []
 
@@ -208,34 +191,9 @@ k8s-v1-30 = ["k8s-openapi/v1_30"]
 tokio-test = "0.4"
 wiremock = "=0.6.5"
 proptest = "1.5"
-wat = "1.251"
-# CLI smoke test dependencies
-assert_cmd = "2"
-predicates = "3"
-# API contract testing dependencies (#1396)
-serde_yaml = "0.9"
+wat = "1.246"
 # Ensure dev builds that pull k8s-openapi 0.22 have an explicit API version feature.
-k8s-openapi = { version = "0.22", default-features = false, features = [
-    "v1_30",
-] }
-# CRD validation micro-benchmarks (benches/crd_operations.rs, #1390)
-criterion = "0.5"
-
-[[bin]]
-name = "stellar-scaffold"
-path = "src/bin/stellar-scaffold.rs"
-
-# crdgen and stellar-log-shipper were previously auto-discovered from src/bin/
-# and listed as orphans by check-unreachable-modules. Both are load-bearing
-# (make crd-gen / ci.yml use crdgen; the operator injects the
-# stellar-log-shipper sidecar), so they are declared here explicitly.
-[[bin]]
-name = "crdgen"
-path = "src/bin/crdgen.rs"
-
-[[bin]]
-name = "stellar-log-shipper"
-path = "src/bin/stellar-log-shipper.rs"
+k8s-openapi = { version = "0.22", default-features = false, features = ["v1_30"] }
 
 [[bin]]
 name = "stellar-operator"
@@ -314,30 +272,4 @@ name = "crd_operations"
 harness = false
 
 [workspace]
-
-# Security-hardened release profile
-[profile.release]
-# Remove debug symbols to reduce binary size and attack surface
-strip = true
-# Don't unwind on panic - abort immediately for security
-panic = "abort"  
-# Single codegen unit for better optimization
-codegen-units = 1
-# Enable link-time optimization for better security and performance
-lto = true
-# Optimize for performance while maintaining security
-opt-level = 3
-
-# Security-hardened profile for production deployments
-[profile.production]
-inherits = "release" 
-# Maximum optimization for production
-opt-level = 3
-# Aggressive dead code elimination
-lto = "fat"
-# Abort on panic in production
-panic = "abort"
-# Strip all symbols
-strip = "symbols"
-# Single codegen unit for maximum optimization
-codegen-units = 1
+members = ["wasm-plugins"]

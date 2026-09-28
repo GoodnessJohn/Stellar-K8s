@@ -86,11 +86,15 @@ pub static HORIZON_QUEUE_LENGTH: Lazy<Family<NodeLabels, Gauge<i64, AtomicI64>>>
 pub static ACTIVE_CONNECTIONS: Lazy<Family<NodeLabels, Gauge<i64, AtomicI64>>> =
     Lazy::new(Family::default);
 
-/// Gauge tracking the ratio (0.0-1.0) of Horizon API requests that returned a 4xx/5xx status
+/// Gauge tracking pending Soroban RPC requests per node.
+pub static PENDING_RPC_QUEUE: Lazy<Family<NodeLabels, Gauge<i64, AtomicI64>>> =
+    Lazy::new(Family::default);
+
+/// Gauge tracking Horizon API request error ratio per node
 pub static HORIZON_REQUEST_ERROR_RATIO: Lazy<Family<NodeLabels, Gauge<f64, AtomicU64>>> =
     Lazy::new(Family::default);
 
-/// Gauge tracking average Horizon database query duration in seconds
+/// Gauge tracking average Horizon database query duration in seconds per node
 pub static HORIZON_DB_QUERY_DURATION_SECONDS: Lazy<Family<NodeLabels, Gauge<f64, AtomicU64>>> =
     Lazy::new(Family::default);
 
@@ -487,8 +491,13 @@ pub static REGISTRY: Lazy<Registry> = Lazy::new(|| {
         ACTIVE_CONNECTIONS.clone(),
     );
     registry.register(
+        "stellar_node_pending_rpc_queue",
+        "Pending Soroban RPC request queue length",
+        PENDING_RPC_QUEUE.clone(),
+    );
+    registry.register(
         "stellar_horizon_request_error_ratio",
-        "Ratio (0.0-1.0) of Horizon API requests that returned a 4xx/5xx status",
+        "Ratio of Horizon API requests returning 4xx/5xx",
         HORIZON_REQUEST_ERROR_RATIO.clone(),
     );
     registry.register(

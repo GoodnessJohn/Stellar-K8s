@@ -2,8 +2,16 @@
 
 This guide walks you through setting up a local development environment for Stellar-K8s, building the project, running tests, and contributing code.
 
+> **New contributor?** Start with the
+> [local development quickstart with kind](docs/getting-started/local-dev.md).
+> It gets you from a clean machine to a running operator, with hot-reloading and
+> integration tests, in about 15 minutes, and covers macOS, Linux and Windows
+> (WSL2) setup plus the common Docker/Kubernetes resource problems. This
+> document is the fuller reference to come back to.
+
 ## Table of Contents
 
+- [Local Development Quickstart (kind)](docs/getting-started/local-dev.md)
 - [Prerequisites](#prerequisites)
 - [Initial Setup](#initial-setup)
 - [Building the Project](#building-the-project)
@@ -358,6 +366,9 @@ RUST_LOG=debug cargo watch -x run
 ## Running E2E Tests
 
 End-to-end tests validate the full operator lifecycle against a real Kubernetes cluster.
+
+For setting up that cluster from scratch, and for what to do when it will not
+start, see the [kind quickstart](docs/getting-started/local-dev.md#integration-tests-against-kind).
 
 ### Prerequisites
 

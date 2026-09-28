@@ -1,49 +1,58 @@
-# Copyright 2024 Stellar-K8s Contributors
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-# =============================================================================
-# Stellar Operator — default Helm values
-# =============================================================================
-#
-# Override precedence (highest wins):
-#   1. Per-release `helm install -f` / `--set` overrides
-#   2. Nested keys in this file (e.g. operator.logLevel)
-#   3. Chart defaults (image.tag falls back to Chart.appVersion when empty)
-#
-# Component images inherit from `image.*` when their repository/tag are empty:
-#   sidecar, forkDetector, byzantineWatcher, scpAnalytics, otel.collector
-#
-# Preset profiles: examples/values-production.yaml, values-ha.yaml
-# =============================================================================
+# Default values for stellar-operator
+# This is a YAML-formatted file.
 
-# --- Core operator deployment ------------------------------------------------
-# For high availability, set to 3 or more.
-# Requires enabling leader election (configured automatically if replicaCount > 1).
-# With leader election enabled, only one replica processes reconciliation at a time,
-# and failover occurs automatically if the leader becomes unavailable.
 replicaCount: 1
 
 image:
-  # Primary operator image; sub-components inherit these when repository/tag are empty.
   repository: ghcr.io/stellar/stellar-k8s
-  pullPolicy: Always
+  pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion
   tag: ""
-  # Optional image digest (use repository@sha256:... to pin exact image)
-  digest: ""
 
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
+
+hooks:
+  preInstall:
+    enabled: false
+  preUpgrade:
+    enabled: false
+    enableRollbackCheck: false
+
+webhook:
+  enabled: false
+
+mtls:
+  enabled: false
+
+certManagement:
+  enabled: false
+
+horizonHpa:
+  enabled: false
+
+rateLimiting:
+  enabled: false
+  distributed:
+    enabled: false
+    failOpen: true
+  redis:
+    address: ""
+    poolSize: 10
+    timeoutMs: 1000
+    tls:
+      enabled: false
+    passwordSecretName: ""
+    passwordSecretKey: "password"
+  tiers: []
+  endpointTiers: {}
+
+prometheus:
+  enabled: false
+
+logShipper:
+  enabled: false
 
 serviceAccount:
   # Specifies whether a service account should be created
@@ -86,14 +95,6 @@ podAnnotations:
   prometheus.io/port: "9090"
   prometheus.io/path: "/metrics"
 
-# Custom annotations to apply to all resources (Deployment, Service, etc)
-# These annotations will be propagated to both resource metadata and pod spec template
-# Example:
-# extraAnnotations:
-#   custom.io/env: production
-#   custom.io/team: platform
-extraAnnotations: {}
-
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65532
@@ -127,49 +128,6 @@ autoscaling:
     minReplicas: 1
     maxReplicas: 10
 
-# Stellar-native HPA for Horizon instances.
-#
-# Scales Horizon Deployment replicas based on two custom metrics exposed by the
-# operator's custom metrics API (custom.metrics.k8s.io/v1beta2):
-#
-#   stellar_horizon_tps         — transactions per second ingested by Horizon
-#   stellar_horizon_queue_length — pending transaction queue depth
-#
-# Requires the custom-metrics APIService to be registered first:
-#   kubectl apply -f config/custom-metrics-apiservice.yaml
-horizonHpa:
-  # Set to true to deploy the HPA for Horizon scaling.
-  enabled: false
-
-  # Kubernetes namespace where the Horizon Deployment lives.
-  # Defaults to the Helm release namespace.
-  namespace: ""
-
-  # Name of the Deployment to scale.
-  targetDeployment: "horizon"
-
-  # Name of the StellarNode CR used as the metric source.
-  stellarNodeName: "horizon"
-
-  # Minimum number of Horizon replicas.
-  minReplicas: 2
-
-  # Maximum number of Horizon replicas.
-  maxReplicas: 10
-
-  # Scale up when observed TPS exceeds this value × current replicas.
-  # E.g. 100 means each replica should handle at most 100 TPS.
-  tpsTargetPerReplica: 100
-
-  # Scale up when the pending transaction queue exceeds this absolute count.
-  queueLengthTarget: 500
-
-  # Seconds of high-load data required before scaling up (prevents flapping).
-  scaleUpStabilizationSeconds: 60
-
-  # Seconds of low-load data required before scaling down.
-  scaleDownStabilizationSeconds: 300
-
 nodeSelector: {}
 
 tolerations: []
@@ -193,14 +151,12 @@ arch: ""
 #     effect: "NoSchedule"
 
 # PodDisruptionBudget configuration for operator deployment
-# Recommended to enable when running multiple replicas for high availability.
-# This ensures at least one operator replica remains available during maintenance.
 podDisruptionBudget:
   enabled: false
-  # Minimum number of available pods (set to 1 for HA with 3+ replicas)
+  # Only takes effect once enabled: true. Without a default here, enabling
+  # the PDB would render neither minAvailable nor maxUnavailable, producing
+  # a no-op PodDisruptionBudget.
   minAvailable: 1
-  # Maximum number of unavailable pods
-  maxUnavailable: null
 
 # Operator configuration
 operator:
@@ -209,17 +165,11 @@ operator:
   # Enable REST API
   restApiEnabled: true
   # REST API port
-  restApiPort: 8080
-  # Metrics port (must differ from restApiPort — Service ports are unique by number)
+  restApiPort: 9090
+  # Metrics port
   metricsPort: 9090
   # Namespace to watch (empty = all namespaces)
   watchNamespace: ""
-  # Optional pprof CPU/heap endpoints (#1330). Off by default.
-  # Requires an operator image built with `--features profiling`.
-  # When enabled, sets REST_API_PROFILING_ENABLED and jemalloc MALLOC_CONF,
-  # and mounts an ephemeral emptyDir at /tmp for jemalloc heap dumps
-  # (readOnlyRootFilesystem stays true).
-  # Endpoints remain Admin-authenticated under /api/v1/debug/pprof/*.
   profiling:
     enabled: false
 
@@ -270,82 +220,8 @@ forkDetector:
 # Service for REST API and metrics
 service:
   type: ClusterIP
-  restApiPort: 8080
+  restApiPort: 9090
   metricsPort: 9090
-
-# Optional top-level Prometheus switch used by some sidecar templates
-# (e.g. scp-kafka-sidecar ServiceMonitor). Prefer `monitoring.*` for the
-# canonical Prometheus Operator integration below.
-prometheus:
-  enabled: false
-
-# Monitoring configuration for Prometheus Operator integration
-# Requires: Prometheus Operator (CRDs: PrometheusRule) to be installed
-monitoring:
-  # Master switch. Set to true to deploy any monitoring resources below.
-  # Requires the Prometheus Operator CRDs (monitoring.coreos.com/v1).
-  enabled: false
-
-  serviceMonitor:
-    enabled: true
-    interval: 30s
-    scrapeTimeout: 10s
-    labels: {}
-
-  # PodMonitor for direct (Service-less) pod scraping, e.g. operator-managed
-  # StellarNode pods that don't have a dedicated Service.
-  podMonitor:
-    enabled: false
-    interval: 30s
-    portName: metrics
-    labels: {}
-    selector:
-      matchExpressions:
-        - key: stellar.org/node-type
-          operator: Exists
-
-  # Canonical PrometheusRule alerts (Stellar node health). The older
-  # templates/prometheusrule.yaml + monitoring.prometheusRules surface was
-  # removed as a redundant duplicate of this path.
-  prometheusRule:
-    enabled: true
-    labels: {}
-    ingestionLagThresholdSeconds: 30
-    ledgerCloseTimeThresholdSeconds: 10
-    # Extra PrometheusRule rules, appended as-is under spec.groups[0].rules.
-    additionalRules: []
-    # Certificate expiry alerts (requires cert-manager Prometheus metrics).
-    certAlerts:
-      enabled: false
-      warningDays: 30
-      criticalDays: 7
-    # Cost optimization anomaly alerts (requires cost metrics from the operator).
-    costAlerts:
-      enabled: false
-    # API rate limiting alerts (requires gateway rate limit metrics).
-    rateLimitAlerts:
-      enabled: false
-
-  grafanaDashboards:
-    enabled: true
-    # Standard label used by the Grafana sidecar dashboard-loader to auto-discover ConfigMaps.
-    labels:
-      grafana_dashboard: "1"
-    # Dashboards to deploy as ConfigMaps (issue #1389).
-    # Each entry becomes a ConfigMap in the release namespace.
-    dashboards:
-      clusterOverview:
-        enabled: true
-        file: "grafana-cluster-overview.json"
-        title: "Stellar Core — Cluster Overview"
-      perNodeStats:
-        enabled: true
-        file: "grafana-per-node-stats.json"
-        title: "Stellar Core — Per-Node Stats"
-      alerting:
-        enabled: true
-        file: "grafana-alerting.json"
-        title: "Stellar Core — Alerting"
 
 # Default resource requests/limits for managed StellarNode pods.
 # Precedence: StellarNode spec.resources > Helm defaults > operator hardcoded fallback.
@@ -373,190 +249,37 @@ defaultResources:
       cpu: "4"
       memory: "8Gi"
 
-# Feature flags — toggle DR / cross-region capabilities.
-# Dead flags that no longer gated any code paths were removed
-# (enableCveScanning, enableReadPool, enablePeerDiscovery,
-# enableArchiveHealth, enableSorobanMetrics, enableScpTopology).
+# Feature flags — toggle operator capabilities at runtime without restart.
 featureFlags:
-  # Gates Helm-rendered DR / cross-region bridge resources and runtime DR drills.
+  enableCveScanning: false
+  enableReadPool: false
   enableDr: false
+  enablePeerDiscovery: true
+  enableArchiveHealth: true
+  enableSorobanMetrics: false
 
-# =============================================================================
-# Performance Profiling (issue #1416)
-# =============================================================================
-# Exposes pprof-compatible profiling endpoints gated behind a shared token.
-# The profiling server binds to localhost ONLY (127.0.0.1:6060) and is never
-# exposed via the main service or ingress.
-#
-# To capture a profile:
-#   kubectl port-forward pod/<operator-pod> 6060:6060
-#   curl -H "X-Profiling-Token: $TOKEN" http://localhost:6060/debug/pprof/profile?duration=30
-#
-# See docs/profiling-runbook.md for full instructions.
-profiling:
-  # Set to true to enable the profiling HTTP server.
-  enabled: false
-  # Bind address (must remain localhost-only in production).
-  bindAddr: "127.0.0.1:6060"
-  # Name of the Kubernetes Secret that holds the raw token value.
-  # Key within the secret must be `token`.
-  tokenSecretName: "stellar-profiling-token"
-  # SHA-256 hex digest of the profiling token (pre-computed to avoid
-  # storing the raw value in values.yaml).
-  # Generate: echo -n "YOUR-TOKEN" | sha256sum | awk '{print $1}'
-  tokenSha256: ""
-  # Default CPU profile duration (seconds) when no ?duration param is given.
-  defaultCpuDurationSecs: 30
-  # Maximum CPU profile duration allowed (seconds).
-  maxCpuDurationSecs: 300
-
-# =============================================================================
-# Cost Optimization (issue #1413)
-# =============================================================================
 costOptimization:
-  # Enable resource usage tracking and right-sizing recommendations.
   resourceTracking:
-    enabled: true
-    # How many hourly observations to retain per workload.
-    windowSize: 336
-    # Headroom factor applied to P95 usage when computing recommendations.
-    headroomFactor: 1.20
-  # Spot instance configuration.
+    enabled: false
+    windowSize: "7d"
+    headroomFactor: 1.2
   spot:
     enabled: false
-    maxPricePerHourUsd: "0.50"
+    maxPricePerHourUsd: "0"
     fallbackToOnDemand: true
-  # Monthly budget guard (USD). Set to 0 to disable.
   monthlyBudgetUsd: 0
 
-# =============================================================================
-# Certificate Management (issue #1415)
-# =============================================================================
-certManagement:
-  # Enable automatic certificate rotation controller.
-  enabled: true
-  # Backend to use: "cert-manager" (default), "vault-pki", or "local-ca".
-  backend: "cert-manager"
-  # ACME account email for Let's Encrypt registration.
-  acmeEmail: "admin@stellar.org"
-  # Ingress class used by the HTTP-01 ACME solver.
-  ingressClass: "nginx"
-  # Vault PKI backend settings (only used when backend == "vault-pki").
-  vault:
-    addr: "https://vault.stellar-system.svc:8200"
-    pkiMount: "pki_int"
-    roleName: "stellar-operator"
-    # Name of the K8s secret containing the Vault token (key: "token").
-    tokenSecretName: ""
-    tlsVerify: true
-  # Expiry monitoring thresholds.
-  expiryAlerts:
-    warningDays: 30
-    criticalDays: 7
-    emergencyHours: 24
-  # Default certificate TTL (hours). 90 days = 2160 hours.
-  defaultTtlHours: 2160
-  # Days before expiry at which auto-renewal is triggered. Must be < defaultTtlHours/24.
-  renewBeforeDays: 30
-  # TLS certificates to provision via cert-manager. Each entry creates a
-  # Certificate resource in the specified namespace.
-  certificates:
-    - name: horizon-tls
-      namespace: stellar
-      commonName: horizon.stellar.org
-      dnsNames:
-        - horizon.stellar.org
-        - api.stellar.org
-    - name: validator-tls
-      namespace: stellar
-      commonName: validator.stellar.org
-      dnsNames:
-        - validator.stellar.org
-        - stellar-validator-0.stellar.svc.cluster.local
-        - stellar-validator-1.stellar.svc.cluster.local
-        - stellar-validator-2.stellar.svc.cluster.local
-    - name: core-tls
-      namespace: stellar
-      commonName: core.stellar.org
-      dnsNames:
-        - core.stellar.org
-        - stellar-core.stellar.svc.cluster.local
-    - name: soroban-rpc-tls
-      namespace: stellar
-      commonName: soroban.stellar.org
-      dnsNames:
-        - soroban.stellar.org
-        - soroban-rpc.stellar.svc.cluster.local
-
-# =============================================================================
-# API Rate Limiting (issue #1384)
-# =============================================================================
-rateLimiting:
-  # Enable rate limiting middleware in the API gateway.
-  enabled: true
-  # Distributed rate limiting uses a shared Redis store so limits are
-  # enforced across all gateway replicas. When disabled, only process-local
-  # (per-replica) limits apply.
-  distributed:
-    enabled: false
-    # When true, requests proceed if Redis is unreachable (fail-open).
-    # Set to false to reject traffic when the shared store is down.
-    failOpen: true
-  # Redis connection for the distributed rate limiter.
-  redis:
-    address: "redis.stellar-system.svc:6379"
-    poolSize: 8
-    timeoutMs: 50
-    # Password for Redis authentication. Reference a Secret for production use.
-    # passwordSecretName: "redis-rate-limit-password"
-    # passwordSecretKey: "password"
-    # Enable TLS for Redis connections (recommended for production).
-    tls:
-      enabled: false
-  # Per-API-key rate limit tiers. Each tier defines request quotas.
-  tiers:
-    - name: free
-      requestsPerMinute: 60
-      requestsPerHour: 1000
-      requestsPerDay: 10000
-      burst: 10
-    - name: standard
-      requestsPerMinute: 100
-      requestsPerHour: 10000
-      requestsPerDay: 100000
-      burst: 20
-    - name: premium
-      requestsPerMinute: 200
-      requestsPerHour: 20000
-      requestsPerDay: 200000
-      burst: 50
-    - name: admin
-      requestsPerMinute: 500
-      requestsPerHour: 50000
-      requestsPerDay: 500000
-      burst: 100
-  # Endpoint-to-tier mapping. Keys are URL path prefixes.
-  endpointTiers:
-    "/health": "free"
-    "/healthz": "free"
-    "/readyz": "free"
-    "/livez": "free"
-    "/metrics": "free"
-    "/api/v1/nodes": "standard"
-    "/api/v1/debug": "admin"
-
-# Cross-region state synchronization. Only rendered when
-# featureFlags.enableDr is also true (see templates/cross-region-bridge.yaml).
-crossRegion:
+# Validator key rotation daemon. Disabled by default; when enabled the operator
+# rotates only Validator seed sources backed by supported external Secret Managers.
+keyRotation:
   enabled: false
-  # Peer clusters this operator bridges to. Each entry renders an
-  # ExternalName Service plus a NetworkPolicy egress rule.
-  peerClusters: []
-  #  - clusterId: us-west-2
-  #    enabled: true
-  #    endpoint: api.us-west-2.example.com   # becomes Service.spec.externalName
-  #    region: us-west-2
-  #    port: 11625
+  intervalSecs: 86400
+  validationWindowSecs: 30
+  validationSampleIntervalSecs: 5
+  minAuthenticatedPeers: 1
+  maxUnhealthySamples: 0
+  rollbackOnFailure: true
+  awsRegion: ""
 
 security:
   audit:
@@ -598,9 +321,6 @@ security:
 #        kubectl label namespace stellar-testnet stellar.org/network=testnet
 #   2. Set networkIsolation.enabled=true and list the namespaces below.
 #   3. Helm upgrade.
-#
-# Ready-to-apply policy templates and testing guidance are documented in
-# docs/network-policy-templates.md.
 networkIsolation:
   # Master switch. Set to true to deploy namespace-level isolation policies.
   enabled: false
@@ -659,8 +379,8 @@ byzantineWatcher:
   # Container image for the watcher binary.
   # Defaults to the same image as the operator (stellar-watcher binary is included).
   image:
-    repository: "" # defaults to .Values.image.repository
-    tag: "" # defaults to .Values.image.tag / chart appVersion
+    repository: ""   # defaults to .Values.image.repository
+    tag: ""          # defaults to .Values.image.tag / chart appVersion
     pullPolicy: IfNotPresent
 
   # Default Stellar network for all watchers (can be overridden per region).
@@ -719,8 +439,6 @@ byzantineWatcher:
 
 # OpenTelemetry configuration
 # Controls OTLP trace export from the operator and the bundled OTel Collector.
-# The operator sets service.name and sampling in code (AlwaysOn); only the OTLP
-# endpoint is injected via OTEL_EXPORTER_OTLP_ENDPOINT when enabled.
 otel:
   # Set to true to enable OTLP trace export from the operator.
   # When enabled, OTEL_EXPORTER_OTLP_ENDPOINT is injected into the operator pod.
@@ -730,6 +448,9 @@ otel:
   # Typically points to the in-cluster OTel Collector service.
   # Example: "http://stellar-operator-otel-collector:4317"
   endpoint: "http://stellar-operator-otel-collector:4317"
+
+  # Sampling ratio (0.0–1.0). 1.0 = always sample, 0.1 = 10% of traces.
+  samplingRatio: "1.0"
 
   # OTel Collector sidecar/deployment bundled with the Helm chart.
   collector:
@@ -769,69 +490,6 @@ otel:
         enabled: false
         endpoint: "http://tempo:4317"
 
-      # Grafana Loki (Loki receiver/exporter)
-      loki:
-        enabled: false
-        endpoint: "http://loki:3100/loki/api/v1/push"
-
-      # Elasticsearch (Elasticsearch exporter)
-      elasticsearch:
-        enabled: false
-        endpoint: "http://elasticsearch:9200"
-        index: "stellar-logs"
-
-# --- Log shipper (per-node Fluent Bit DaemonSet) -----------------------------
-logShipper:
-  # Deploys a Fluent Bit DaemonSet that tails container logs on every node and
-  # forwards them to a central log store (Loki or Elasticsearch).
-  # DISABLED by default: the operator always writes structured JSON to stdout,
-  # so any aggregator (Loki + Promtail, Filebeat, ...) can consume it without
-  # this DaemonSet. Keep the rendered output stable by leaving it disabled in
-  # the committed drift goldens (issue #1381).
-  enabled: false
-
-  image:
-    repository: fluent/fluent-bit
-    tag: "3.2.5"
-    pullPolicy: IfNotPresent
-
-  # Attach pod/namespace labels to every forwarded record via the Kubernetes
-  # metadata filter.
-  kubernetesFilter: true
-
-  # Already-JSON logs are merged into structured fields (level, msg, span_id)
-  # by the "render log" processing step.
-  jsonParsing: true
-
-  # Fluent Bit's own log verbosity (info, warn, error, or debug).
-  logLevel: "warn"
-
-  resources:
-    limits:
-      cpu: 200m
-      memory: 256Mi
-    requests:
-      cpu: 50m
-      memory: 64Mi
-
-  # Exactly one output backend should be enabled at a time. If none is enabled
-  # the shipper echoes structured JSON to stdout (useful for local testing).
-  loki:
-    enabled: false
-    host: "loki"
-    port: 3100
-    # Optional Loki multi-tenant ingestion ID.
-    tenantId: ""
-
-  elasticsearch:
-    enabled: false
-    host: "elasticsearch"
-    port: 9200
-    index: "stellar-logs"
-
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
 
 # SCP Analytics Pipeline Configuration
 # Real-time streaming of SCP messages to Kafka for network topology analysis
@@ -871,7 +529,7 @@ scpAnalytics:
     # SASL authentication (optional)
     sasl:
       enabled: false
-      mechanism: "PLAIN" # PLAIN, SCRAM-SHA-256, SCRAM-SHA-512
+      mechanism: "PLAIN"  # PLAIN, SCRAM-SHA-256, SCRAM-SHA-512
       username: ""
       password: ""
 
@@ -908,12 +566,6 @@ scpAnalytics:
 
     # Log level
     logLevel: "info"
-
-    # Pod-level security context for the consumer Deployment
-    podSecurityContext:
-      runAsNonRoot: true
-      runAsUser: 1000
-      fsGroup: 1000
 
     # Resource limits
     resources:

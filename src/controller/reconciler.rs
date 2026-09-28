@@ -33,6 +33,7 @@
 
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -89,6 +90,7 @@ use super::operator_config::{hardcoded_defaults, OperatorConfig};
 use super::peer_discovery;
 use super::phases::{PhaseMachine, ReconcilePhase};
 use super::pss;
+use super::snapshot;
 use super::remediation;
 use super::resources;
 use super::secret_watcher;
@@ -99,6 +101,7 @@ use super::sync_state_monitor;
 use super::vpa as vpa_controller;
 use super::vsl;
 use chrono::Utc;
+
 
 trait ToStellarNodeArc {
     fn to_arc(&self) -> Arc<StellarNode>;
@@ -403,6 +406,8 @@ impl ControllerState {
 ///         log_reload_handle: reload_handle,
 ///         log_level_expires_at: Arc::new(tokio::sync::Mutex::new(None)),
 ///         last_event_received: Arc::new(AtomicU64::new(0)),
+///         job_registry: Arc::new(Default::default()),
+///         audit_log: Arc::new(Default::default()),
 ///         job_registry: Arc::new(stellar_k8s::controller::background_jobs::JobRegistry::new()),
 ///         audit_log: Arc::new(stellar_k8s::controller::audit_log::AuditLog::new()),
 ///         audit_recorder: Arc::new(stellar_k8s::controller::AuditRecorder::new(
@@ -527,6 +532,21 @@ pub async fn run_controller(state: Arc<ControllerState>) -> Result<()> {
         tokio::spawn(async move {
             if let Err(e) = audit_worker.run().await {
                 error!("Audit Worker stopped with error: {}", e);
+            }
+        });
+    }
+
+    // Start Validator Key Rotation daemon if explicitly enabled.
+    if state.operator_config.key_rotation.enabled {
+        let daemon = Arc::new(super::security::rotation::KeyRotationDaemon::new(
+            client.clone(),
+            state.watch_namespace.clone(),
+            state.operator_config.key_rotation.clone(),
+            state.job_registry.clone(),
+        ));
+        tokio::spawn(async move {
+            if let Err(e) = daemon.run().await {
+                error!("Validator Key Rotation daemon stopped with error: {}", e);
             }
         });
     }
@@ -695,6 +715,394 @@ async fn workload_resource_exists(client: &Client, node: &StellarNode) -> Result
                 Err(kube::Error::Api(e)) if e.code == 404 => Ok(false),
                 Err(e) => Err(Error::KubeError(e)),
             }
+        }
+    }
+}
+
+pub(crate) fn build_pre_upgrade_snapshot_name(node: &StellarNode, version: &str) -> String {
+    let mut sanitized_version = version
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .collect::<String>();
+    sanitized_version = sanitized_version.trim_matches('-').to_string();
+    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
+    let base = format!("{}-upgrade-{}-{}", node.name_any(), sanitized_version, timestamp);
+    if base.len() <= 253 {
+        base
+    } else {
+        base.chars().take(253).collect()
+    }
+}
+
+async fn patch_upgrade_snapshot_annotations(
+    client: &Client,
+    node: &StellarNode,
+    snapshot_name: Option<&str>,
+    target_version: Option<&str>,
+    started_at: Option<&str>,
+    status: Option<&str>,
+) -> Result<()> {
+    let namespace = node.namespace().unwrap_or_else(|| "default".to_string());
+    let api: Api<StellarNode> = Api::namespaced(client.clone(), &namespace);
+    let name = node.name_any();
+
+    let mut annotations = node.metadata.annotations.clone().unwrap_or_default();
+
+    match snapshot_name {
+        Some(value) => {
+            annotations.insert(PRE_UPGRADE_SNAPSHOT_NAME_ANNOTATION.to_string(), value.to_string());
+        }
+        None => {
+            annotations.remove(PRE_UPGRADE_SNAPSHOT_NAME_ANNOTATION);
+        }
+    }
+
+    match target_version {
+        Some(value) => {
+            annotations.insert(
+                PRE_UPGRADE_SNAPSHOT_TARGET_VERSION_ANNOTATION.to_string(),
+                value.to_string(),
+            );
+        }
+        None => {
+            annotations.remove(PRE_UPGRADE_SNAPSHOT_TARGET_VERSION_ANNOTATION);
+        }
+    }
+
+    match started_at {
+        Some(value) => {
+            annotations.insert(
+                PRE_UPGRADE_SNAPSHOT_STARTED_AT_ANNOTATION.to_string(),
+                value.to_string(),
+            );
+        }
+        None => {
+            annotations.remove(PRE_UPGRADE_SNAPSHOT_STARTED_AT_ANNOTATION);
+        }
+    }
+
+    match status {
+        Some(value) => {
+            annotations.insert(PRE_UPGRADE_SNAPSHOT_STATUS_ANNOTATION.to_string(), value.to_string());
+        }
+        None => {
+            annotations.remove(PRE_UPGRADE_SNAPSHOT_STATUS_ANNOTATION);
+        }
+    }
+
+    let patch = serde_json::json!({"metadata": {"annotations": annotations}});
+    api.patch(
+        &name,
+        &PatchParams::apply("stellar-operator"),
+        &Patch::Merge(&patch),
+    )
+    .await
+    .map_err(Error::KubeError)?;
+
+    Ok(())
+}
+
+async fn reconcile_pre_upgrade_snapshot(
+    client: &Client,
+    reporter: &Reporter,
+    node: &StellarNode,
+    backup_config: &crate::crd::BackupConfig,
+    current_version: Option<&str>,
+) -> Result<bool> {
+    let desired_version = node.spec.version.as_str();
+    if current_version == Some(desired_version) {
+        return Ok(true);
+    }
+
+    let namespace = node.namespace().unwrap_or_else(|| "default".to_string());
+    let name = node.name_any();
+    let annotations = node.metadata.annotations.clone().unwrap_or_default();
+
+    let snapshot_name = annotations
+        .get(PRE_UPGRADE_SNAPSHOT_NAME_ANNOTATION)
+        .cloned();
+    let snapshot_target_version = annotations
+        .get(PRE_UPGRADE_SNAPSHOT_TARGET_VERSION_ANNOTATION)
+        .map(|value| value.as_str());
+    let started_at = annotations
+        .get(PRE_UPGRADE_SNAPSHOT_STARTED_AT_ANNOTATION)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok());
+
+    let snapshot_name = if let Some(snapshot_name) = snapshot_name {
+        if snapshot_target_version != Some(desired_version) {
+            let rebuilt_name = build_pre_upgrade_snapshot_name(node, desired_version);
+            patch_upgrade_snapshot_annotations(
+                client,
+                node,
+                Some(&rebuilt_name),
+                Some(desired_version),
+                Some(&chrono::Utc::now().to_rfc3339()),
+                Some("Requested"),
+            )
+            .await?;
+
+            publish_stellar_event!(
+                client,
+                reporter,
+                node,
+                EventType::Normal,
+                "PreUpgradeSnapshotRequested",
+                "Snapshot",
+                &format!(
+                    "Requested pre-upgrade snapshot {rebuilt_name} before updating to version {desired_version}"
+                ),
+            )
+            .await?;
+
+            if backup_config.flush_before_snapshot {
+                if let Err(e) = snapshot::request_db_flush(client, node) {
+                    warn!(
+                        "Pre-upgrade snapshot flush requested but failed for {}/{}: {}. Proceeding with snapshot.",
+                        namespace, name, e
+                    );
+                }
+            }
+
+            if let Err(e) = snapshot::create_pre_upgrade_snapshot(client, node, &rebuilt_name, backup_config).await {
+                let message = format!(
+                    "Failed to create pre-upgrade snapshot {rebuilt_name} for {}/{}: {}",
+                    namespace, name, e
+                );
+                publish_stellar_event!(
+                    client,
+                    reporter,
+                    node,
+                    EventType::Warning,
+                    "PreUpgradeSnapshotFailed",
+                    "Snapshot",
+                    &message,
+                )
+                .await?;
+                update_status(
+                    client,
+                    node,
+                    "Failed",
+                    Some(message.clone()),
+                    node.status.as_ref().map(|status| status.ready_replicas).unwrap_or(0),
+                    false,
+                )
+                .await?;
+                return Err(e);
+            }
+            update_status(
+                client,
+                node,
+                "Progressing",
+                Some(format!(
+                    "Waiting for pre-upgrade snapshot {rebuilt_name} before updating to version {desired_version}"
+                )),
+                node.status.as_ref().map(|status| status.ready_replicas).unwrap_or(0),
+                false,
+            )
+            .await?;
+            return Ok(false);
+        }
+        snapshot_name
+    } else {
+        let rebuilt_name = build_pre_upgrade_snapshot_name(node, desired_version);
+        let started = chrono::Utc::now().to_rfc3339();
+        patch_upgrade_snapshot_annotations(
+            client,
+            node,
+            Some(&rebuilt_name),
+            Some(desired_version),
+            Some(&started),
+            Some("Requested"),
+        )
+        .await?;
+
+        publish_stellar_event!(
+            client,
+            reporter,
+            node,
+            EventType::Normal,
+            "PreUpgradeSnapshotRequested",
+            "Snapshot",
+            &format!(
+                "Requested pre-upgrade snapshot {rebuilt_name} before updating to version {desired_version}"
+            ),
+        )
+        .await?;
+
+        if backup_config.flush_before_snapshot {
+            if let Err(e) = snapshot::request_db_flush(client, node) {
+                warn!(
+                    "Pre-upgrade snapshot flush requested but failed for {}/{}: {}. Proceeding with snapshot.",
+                    namespace, name, e
+                );
+            }
+        }
+
+        if let Err(e) = snapshot::create_pre_upgrade_snapshot(client, node, &rebuilt_name, backup_config).await {
+            let message = format!(
+                "Failed to create pre-upgrade snapshot {rebuilt_name} for {}/{}: {}",
+                namespace, name, e
+            );
+            publish_stellar_event!(
+                client,
+                reporter,
+                node,
+                EventType::Warning,
+                "PreUpgradeSnapshotFailed",
+                "Snapshot",
+                &message,
+            )
+            .await?;
+            update_status(
+                client,
+                node,
+                "Failed",
+                Some(message.clone()),
+                node.status.as_ref().map(|status| status.ready_replicas).unwrap_or(0),
+                false,
+            )
+            .await?;
+            return Err(e);
+        }
+        update_status(
+            client,
+            node,
+            "Progressing",
+            Some(format!(
+                "Waiting for pre-upgrade snapshot {rebuilt_name} before updating to version {desired_version}"
+            )),
+            node.status.as_ref().map(|status| status.ready_replicas).unwrap_or(0),
+            false,
+        )
+        .await?;
+        return Ok(false);
+    };
+
+    let snapshot_name = snapshot_name.as_str();
+    match snapshot::get_volume_snapshot_readiness(client, node, snapshot_name).await {
+        Ok(snapshot::VolumeSnapshotReadiness::Ready) => {
+            patch_upgrade_snapshot_annotations(client, node, None, None, None, None).await?;
+            publish_stellar_event!(
+                client,
+                reporter,
+                node,
+                EventType::Normal,
+                "PreUpgradeSnapshotReady",
+                "Snapshot",
+                &format!(
+                    "Pre-upgrade snapshot {snapshot_name} is ReadyToUse; resuming rollout to {desired_version}"
+                ),
+            )
+            .await?;
+            update_status(
+                client,
+                node,
+                "Progressing",
+                Some(format!(
+                    "Pre-upgrade snapshot {snapshot_name} is ReadyToUse; resuming rollout to {desired_version}"
+                )),
+                node.status.as_ref().map(|status| status.ready_replicas).unwrap_or(0),
+                false,
+            )
+            .await?;
+            Ok(true)
+        }
+        Ok(snapshot::VolumeSnapshotReadiness::Pending) => {
+            if let Some(started_at) = started_at {
+                let elapsed = chrono::Utc::now()
+                    .signed_duration_since(started_at.with_timezone(&chrono::Utc))
+                    .num_seconds();
+                if elapsed >= backup_config.ready_timeout_seconds as i64 {
+                    let message = format!(
+                        "Pre-upgrade snapshot {snapshot_name} did not become ReadyToUse within {} seconds",
+                        backup_config.ready_timeout_seconds
+                    );
+                    publish_stellar_event!(
+                        client,
+                        reporter,
+                        node,
+                        EventType::Warning,
+                        "PreUpgradeSnapshotTimedOut",
+                        "Snapshot",
+                        &message,
+                    )
+                    .await?;
+                    update_status(
+                        client,
+                        node,
+                        "Failed",
+                        Some(message.clone()),
+                        node.status.as_ref().map(|status| status.ready_replicas).unwrap_or(0),
+                        false,
+                    )
+                    .await?;
+                    return Err(Error::ConfigError(message));
+                }
+            }
+
+            update_status(
+                client,
+                node,
+                "Progressing",
+                Some(format!(
+                    "Waiting for pre-upgrade snapshot {snapshot_name} to become ReadyToUse before updating to {desired_version}"
+                )),
+                node.status.as_ref().map(|status| status.ready_replicas).unwrap_or(0),
+                false,
+            )
+            .await?;
+            Ok(false)
+        }
+        Ok(snapshot::VolumeSnapshotReadiness::Failed(reason)) => {
+            let message = format!(
+                "Pre-upgrade snapshot {snapshot_name} failed: {reason}. Upgrade halted."
+            );
+            publish_stellar_event!(
+                client,
+                reporter,
+                node,
+                EventType::Warning,
+                "PreUpgradeSnapshotFailed",
+                "Snapshot",
+                &message,
+            )
+            .await?;
+            update_status(
+                client,
+                node,
+                "Failed",
+                Some(message.clone()),
+                node.status.as_ref().map(|status| status.ready_replicas).unwrap_or(0),
+                false,
+            )
+            .await?;
+            Err(Error::ConfigError(message))
+        }
+        Err(e) => {
+            let message = format!(
+                "Failed to query pre-upgrade snapshot {snapshot_name} for {}/{}: {}",
+                namespace, name, e
+            );
+            publish_stellar_event!(
+                client,
+                reporter,
+                node,
+                EventType::Warning,
+                "PreUpgradeSnapshotFailed",
+                "Snapshot",
+                &message,
+            )
+            .await?;
+            update_status(
+                client,
+                node,
+                "Failed",
+                Some(message.clone()),
+                node.status.as_ref().map(|status| status.ready_replicas).unwrap_or(0),
+                false,
+            )
+            .await?;
+            Err(e)
         }
     }
 }
@@ -1602,7 +2010,7 @@ pub(crate) fn apply_stellar_node(
             .await
             .unwrap_or(false);
 
-        advance_phase(&phases, ReconcilePhase::Deploying, "prerequisites ready; rolling out the workload");
+
         // 5. Create/update the Deployment/StatefulSet based on node type
         let workload_result = apply_or_emit!(
             &ctx,
@@ -2177,11 +2585,23 @@ pub(crate) fn apply_stellar_node(
             }
         }
 
+        // 6.5b. Pending-queue custom autoscaling (Soroban RPC only).
+        // Drives the Deployment replica count directly from the node's pending
+        // request queue so burst traffic scales within one poll cycle. This is
+        // a sibling of the gas autoscaler; the two may coexist (each patches a
+        // different knob: Deployment replicas vs HPA minReplicas).
+        if !ctx.dry_run && node.spec.node_type == NodeType::SorobanRpc {
+            crate::controller::autoscaler::ensure_queue_autoscaler_running(
+                client.clone(),
+                &node,
+            );
+        }
+
         // 6a. CSI VolumeSnapshot schedule (Validator only)
         if node.spec.node_type == NodeType::Validator {
             if let Some(ref snapshot_config) = node.spec.snapshot_schedule {
                 if let Err(e) =
-                    super::snapshot::reconcile_snapshot(&client, &node, snapshot_config).await
+                    super::csi_snapshot::reconcile_snapshot(&client, &node, snapshot_config).await
                 {
                     warn!(
                         "Snapshot reconciliation failed for {}/{}: {}",
@@ -3246,6 +3666,32 @@ async fn get_current_deployment_version(
     }
 
     Ok(None)
+}
+
+/// Get the current version of the validator StatefulSet.
+#[instrument(skip(client, node), fields(name = %node.name_any(), namespace = node.namespace()))]
+async fn get_current_statefulset_version(
+    client: &Client,
+    node: &StellarNode,
+) -> Result<Option<String>> {
+    let namespace = node.namespace().unwrap_or_else(|| "default".to_string());
+    let name = node.name_any();
+
+    let api: Api<StatefulSet> = Api::namespaced(client.clone(), &namespace);
+    match api.get(&name).await {
+        Ok(statefulset) => {
+            let version = statefulset
+                .spec
+                .as_ref()
+                .and_then(|s| s.template.spec.as_ref())
+                .and_then(|ts| ts.containers.first())
+                .and_then(|c| c.image.as_ref())
+                .and_then(|img| img.split(':').next_back())
+                .map(|v| v.to_string());
+            Ok(version)
+        }
+        Err(_) => Ok(None),
+    }
 }
 
 /// Check health of canary pods

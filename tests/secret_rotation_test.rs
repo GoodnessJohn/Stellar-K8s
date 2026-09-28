@@ -50,6 +50,19 @@ async fn test_secret_rotation_config_serialization() {
 }
 
 #[tokio::test]
+async fn test_password_generation() {
+    // This test requires a Kubernetes client, so we'll skip it in CI
+    // In a real environment, you would use a test cluster
+    if std::env::var("KUBERNETES_SERVICE_HOST").is_err() {
+        return;
+    }
+
+    let config = SecretRotationConfig::default();
+    let client = kube::Client::try_default().await.unwrap();
+    let _scheduler = SecretRotationScheduler::new(config.clone(), client);
+
+    // Test password generation through the public interface
+    // Note: generate_secure_password is private, so we test indirectly
 async fn test_secret_rotation_config_round_trip_preserves_all_fields() {
     let config = secret_rotation_full();
     let deserialized: SecretRotationConfig =
