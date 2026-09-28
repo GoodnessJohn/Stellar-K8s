@@ -277,3 +277,11 @@ pub use ledger_close_dispatcher::{
     run_ledger_close_poll_loop, LedgerCloseDispatcher,
 };
 pub use orphan_audit::{OrphanAuditReport, OrphanAuditor, OrphanedResource};
+
+// Issue #46 — Finalizer Cleanup Recovery Controller
+pub use finalizers::cleanup::{
+    run_finalizer_recovery_controller, RecoveryConfig, RecoveryOutcome,
+};
+pub use finalizers::cloud_verify::{
+    AwsEbsVerifier, CloudVerifier, GcpPdVerifier, StubVerifier, VolumeAttachmentStatus,
+};
